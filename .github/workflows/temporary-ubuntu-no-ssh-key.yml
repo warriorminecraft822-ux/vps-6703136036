@@ -1,0 +1,79 @@
+name: Temporary-Ubuntu-Desktop
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+
+    steps:
+      - name: Install Ubuntu desktop and RDP
+        shell: bash
+        run: |
+          set -e
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            xfce4 xfce4-goodies xrdp dbus-x11 \
+            htop curl wget nano python3 python3-venv git
+          sudo systemctl enable --now xrdp
+
+      - name: Create RDP login
+        shell: bash
+        env:
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+        run: |
+          set -e
+          if [ -z "$RDP_PASSWORD" ]; then
+            echo "Missing repository secret: RDP_PASSWORD"
+            exit 1
+          fi
+          sudo useradd -m -s /bin/bash admin || true
+          echo "admin:$RDP_PASSWORD" | sudo chpasswd
+          echo "xfce4-session" | sudo tee /home/admin/.xsession >/dev/null
+          sudo chown admin:admin /home/admin/.xsession
+          sudo adduser xrdp ssl-cert
+          sudo systemctl restart xrdp
+
+      - name: Install and connect Tailscale
+        shell: bash
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+        run: |
+          set -e
+          if [ -z "$TS_AUTHKEY" ]; then
+            echo "Missing repository secret: TS_AUTHKEY"
+            exit 1
+          fi
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo tailscale up --authkey="$TS_AUTHKEY" --hostname="temporary-ubuntu-desktop"
+          TS_IP="$(tailscale ip -4 | head -n 1)"
+          echo "TS_IP=$TS_IP" >> "$GITHUB_ENV"
+          echo "Tailscale IP: $TS_IP"
+
+      - name: Optional Telegram notification
+        if: ${{ always() }}
+        shell: bash
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ] && [ -n "$TS_IP" ]; then
+            TEXT="Temporary Ubuntu desktop is ready. RDP address: $TS_IP | Username: admin | Password: the RDP_PASSWORD secret. Session ends automatically after about 5h50m."
+            curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+              --data-urlencode "text=${TEXT}" >/dev/null
+          fi
+
+      - name: Keep temporary desktop running
+        shell: bash
+        run: |
+          echo "Temporary desktop is active; GitHub will stop this runner automatically at the job timeout."
+          while true; do
+            date
+            sleep 300
+          done
