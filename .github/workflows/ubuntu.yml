@@ -1,0 +1,53 @@
+name: Ubuntu-VPS
+on:
+  workflow_dispatch:
+    inputs:
+      ts_authkey: { required: true }
+      telegram_chat_id: { required: false }
+      bot_token: { required: false }
+permissions: { contents: read, actions: write }
+jobs:
+  vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Setup SSH & User
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssh-server sudo
+          sudo userdel -r admin 2>/dev/null || true
+          sudo groupdel admin 2>/dev/null || true
+          sudo useradd -m -s /bin/bash -U admin
+          echo 'admin:Pass@2026' | sudo chpasswd
+          sudo usermod -aG sudo admin
+          sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          echo "PasswordAuthentication yes" | sudo tee -a /etc/ssh/sshd_config
+          sudo systemctl restart ssh || sudo service ssh restart
+      
+      - name: Setup Hostname & Prompt
+        run: |
+          sudo hostnamectl set-hostname ubuntu
+          echo 'export HOME=/home/admin' | sudo tee -a /home/admin/.bashrc
+          echo 'export PS1="\[\e[1;32m\]┌──(\[\e[1;33m\]admin㉿ubuntu\[\e[1;32m\])-[\[\e[0m\]\w\[\e[1;32m\]]\n\[\e[1;32m\]└─\[\e[1;33m\]\$ \[\e[0m\]"' | sudo tee -a /home/admin/.bashrc
+          sudo chown admin:admin /home/admin/.bashrc
+          sudo -u admin mkdir -p /home/admin/.config
+      
+      - name: Install Essential Tools
+        run: |
+          sudo apt-get install -y fastfetch htop curl wget nano vim
+      
+      
+      
+      - name: Install Tailscale
+        run: curl -fsSL https://tailscale.com/install.sh | sh
+      
+      - name: Connect Tailscale
+        run: |
+          sudo tailscale up --authkey "${{ inputs.ts_authkey }}" --hostname "ubuntu-vps"
+          IP=$(tailscale ip -4 | head -n 1)
+          CHAT_ID="${{ inputs.telegram_chat_id }}"; BOT="${{ inputs.bot_token }}"
+          TEXT="✅ Ubuntu Ready! IP: $IP | User: admin | Pass: Pass@2026 | Mode: CLI"
+          curl -s -X POST "https://api.telegram.org/bot$BOT/sendMessage" -d "chat_id=$CHAT_ID" -d "text=$TEXT" > /dev/null
+      
+      - name: Keep Alive
+        run: while true; do echo "Active"; sleep 300; done
